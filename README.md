@@ -9,13 +9,12 @@ This simple project creates a small weatherstation you can mount anywhere for at
 
 # New Build Guide
 
-1. **Obtain APIs**
-   - Go to the respective websites for Reddit and OpenWeather and create an account.
-   - Follow the instructions to obtain your API keys.
+1. **Obtain API**
+   - Obtain an OpenWeather API key.
 
 2. **Configure SD Card:**
    - Use the Raspberry Pi Imager.
-   - Install RaspberryPi OS <b>(Legacy, 32-bit Lite) Bullseye</b>. NOTE: For the time being, I've only been able to replicate successful installs with this setup.
+   - Install RaspberryPi OS.
    - Set a hostname, ID, and unique password.
    - Add your network SSID and password.
    - Enable SSH on the second tab.
