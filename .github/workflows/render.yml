@@ -1,6 +1,6 @@
-# Renders the demo screen on the oldest and newest supported Pillow, so layout or
-# Pillow API breakage shows up here instead of on someone's wall.
-name: Render demo
+# Runs the tests and renders the demo screen on the oldest and newest supported Pillow,
+# so layout or Pillow API breakage shows up here instead of on someone's wall.
+name: Test and render
 
 on: [push, pull_request]
 
@@ -21,6 +21,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install requests "pillow${{ matrix.pillow && format('=={0}', matrix.pillow) || '' }}"
       - run: bash -n install.sh
+      - run: python -m unittest discover tests -v
       - run: python weather_station.py --demo --preview preview.png
       - uses: actions/upload-artifact@v7
         with:

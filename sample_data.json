@@ -1,8 +1,170 @@
 {
-  "current": {"temp": 52.4},
-  "daily": [
-    {"temp": {"min": 41.2, "max": 58.6}, "weather": [{"description": "light rain"}]},
-    {"temp": {"min": 44.0, "max": 61.3}, "weather": [{"description": "heavy intensity rain"}]},
-    {"temp": {"min": 47.1, "max": 64.8}, "weather": [{"description": "scattered clouds"}]}
+ "timezone_offset": -14400,
+ "current": {
+  "dt": 1792582200,
+  "temp": 48.2,
+  "feels_like": 44.6,
+  "wind_speed": 9.2,
+  "wind_gust": 14.1,
+  "uvi": 0.4,
+  "weather": [
+   {
+    "id": 801,
+    "description": "few clouds"
+   }
   ]
+ },
+ "hourly": [
+  {
+   "dt": 1792580400,
+   "temp": 47,
+   "pop": 0
+  },
+  {
+   "dt": 1792584000,
+   "temp": 48,
+   "pop": 0
+  },
+  {
+   "dt": 1792587600,
+   "temp": 51,
+   "pop": 0
+  },
+  {
+   "dt": 1792591200,
+   "temp": 54,
+   "pop": 0
+  },
+  {
+   "dt": 1792594800,
+   "temp": 57,
+   "pop": 0.05
+  },
+  {
+   "dt": 1792598400,
+   "temp": 59,
+   "pop": 0.2
+  },
+  {
+   "dt": 1792602000,
+   "temp": 60,
+   "pop": 0.5
+  },
+  {
+   "dt": 1792605600,
+   "temp": 61,
+   "pop": 0.7
+  },
+  {
+   "dt": 1792609200,
+   "temp": 60,
+   "pop": 0.65
+  },
+  {
+   "dt": 1792612800,
+   "temp": 58,
+   "pop": 0.4
+  },
+  {
+   "dt": 1792616400,
+   "temp": 55,
+   "pop": 0.2
+  },
+  {
+   "dt": 1792620000,
+   "temp": 53,
+   "pop": 0.1
+  },
+  {
+   "dt": 1792623600,
+   "temp": 52,
+   "pop": 0
+  },
+  {
+   "dt": 1792627200,
+   "temp": 51,
+   "pop": 0
+  },
+  {
+   "dt": 1792630800,
+   "temp": 50,
+   "pop": 0
+  },
+  {
+   "dt": 1792634400,
+   "temp": 49,
+   "pop": 0
+  }
+ ],
+ "daily": [
+  {
+   "dt": 1792598400,
+   "sunrise": 1792581300,
+   "sunset": 1792620600,
+   "temp": {
+    "min": 45,
+    "max": 61
+   },
+   "weather": [
+    {
+     "id": 500,
+     "description": "light rain"
+    }
+   ],
+   "pop": 0.7,
+   "uvi": 4.1
+  },
+  {
+   "dt": 1792684800,
+   "sunrise": 1792667760,
+   "sunset": 1792706880,
+   "temp": {
+    "min": 41,
+    "max": 54
+   },
+   "weather": [
+    {
+     "id": 803,
+     "description": "broken clouds"
+    }
+   ],
+   "pop": 0.05,
+   "uvi": 3.6
+  },
+  {
+   "dt": 1792771200,
+   "sunrise": 1792754220,
+   "sunset": 1792793220,
+   "temp": {
+    "min": 44,
+    "max": 57
+   },
+   "weather": [
+    {
+     "id": 500,
+     "description": "light rain"
+    }
+   ],
+   "pop": 0.4,
+   "uvi": 2.9
+  },
+  {
+   "dt": 1792857600,
+   "sunrise": 1792840680,
+   "sunset": 1792879500,
+   "temp": {
+    "min": 46,
+    "max": 63
+   },
+   "weather": [
+    {
+     "id": 802,
+     "description": "scattered clouds"
+    }
+   ],
+   "pop": 0.0,
+   "uvi": 3.8
+  }
+ ],
+ "alerts": []
 }

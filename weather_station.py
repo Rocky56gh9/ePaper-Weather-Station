@@ -1,39 +1,70 @@
 #!/usr/bin/env python3
-"""Show current conditions and a 3-day forecast on a Waveshare 3.52" e-Paper display.
+"""Show current conditions, the next 12 hours, and a 3-day forecast on a Waveshare 3.52" e-Paper display.
 
     python3 weather_station.py                          fetch weather and update the display
     python3 weather_station.py --deep-clean             cycle the panel black/white first (nightly)
+    python3 weather_station.py --force                  update even during quiet hours
     python3 weather_station.py --preview out.png        render to a PNG instead of the display
     python3 weather_station.py --demo --preview out.png use bundled sample data; no API key or hardware
 """
 import argparse
 import configparser
 import fcntl
+import hashlib
 import json
 import logging
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+
+import layout
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.ini"
 SAMPLE_PATH = ROOT / "sample_data.json"
+CACHE_PATH = ROOT / "last_forecast.json"     # last good API response, shown when offline
+SHOWN_PATH = ROOT / ".last_display"          # fingerprint of the image on the panel
 LOCK_PATH = ROOT / ".update.lock"
-FONT_REGULAR = ROOT / "fonts" / "DejaVuSans.ttf"
-FONT_BOLD = ROOT / "fonts" / "DejaVuSans-Bold.ttf"
 
-WIDTH, HEIGHT = 360, 240  # landscape; the panel itself is 240x360 portrait
 ONE_CALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
-UNIT_SYMBOLS = {"imperial": "°F", "metric": "°C", "standard": "K"}
+
+# Callout thresholds when config.ini leaves them blank, in the configured units
+DEFAULT_THRESHOLDS = {
+    "imperial": {"wind": 15, "gusts": 25, "uv_index": 6, "temp_swing": 10},
+    "metric": {"wind": 7, "gusts": 11, "uv_index": 6, "temp_swing": 6},
+}
 
 log = logging.getLogger("weather_station")
 
 
 class StationError(Exception):
     """A problem the user can fix; the message says how."""
+
+
+class FetchError(StationError):
+    """OpenWeather couldn't be reached or refused the request; a cached forecast can stand in."""
+
+
+def parse_hours(text, name):
+    """Parse quiet_hours like "0-5" or "23-6" into (start, end), or None when blank."""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        start, end = (int(part) for part in text.split("-"))
+    except ValueError:
+        raise StationError(f"{name} must look like 0-5 (start and end hour, 24-hour clock), or be blank.")
+    if not (0 <= start <= 23 and 0 <= end <= 23):
+        raise StationError(f"{name} hours must be between 0 and 23.")
+    return start, end
+
+
+def in_hours(hour, span):
+    start, end = span
+    return start <= hour < end if start <= end else hour >= start or hour < end
 
 
 def load_config(path):
@@ -43,19 +74,39 @@ def load_config(path):
     parser.read(path)
     if "openweather" not in parser:
         raise StationError(f"{path.name} has no [openweather] section. Compare it with config.example.ini.")
-    section = parser["openweather"]
+    weather = parser["openweather"]
+    display = parser["display"] if "display" in parser else {}
 
-    api_key = section.get("api_key", "").strip()
+    api_key = weather.get("api_key", "").strip()
     if not api_key or api_key.startswith("YOUR_"):
         raise StationError(f"Set api_key in {path.name}.")
     try:
-        lat, lon = float(section["latitude"]), float(section["longitude"])
+        lat, lon = float(weather["latitude"]), float(weather["longitude"])
     except (KeyError, ValueError):
         raise StationError(f"Set latitude and longitude in {path.name} as decimal numbers, e.g. 51.51 and -0.13.")
-    units = section.get("units", "imperial").strip().lower()
-    if units not in UNIT_SYMBOLS:
-        raise StationError(f"units in {path.name} must be one of: {', '.join(UNIT_SYMBOLS)}.")
-    return {"api_key": api_key, "lat": lat, "lon": lon, "units": units}
+    units = weather.get("units", "imperial").strip().lower()
+    if units not in DEFAULT_THRESHOLDS:
+        raise StationError(f"units in {path.name} must be imperial or metric.")
+
+    thresholds = dict(DEFAULT_THRESHOLDS[units])
+    for key in thresholds:
+        value = display.get(key, "").strip()
+        if value:
+            try:
+                thresholds[key] = float(value)
+            except ValueError:
+                raise StationError(f"{key} in {path.name} must be a number, or blank for the default.")
+    try:
+        evening_starts = int(display.get("evening_starts", "18").strip() or 18)
+    except ValueError:
+        raise StationError(f"evening_starts in {path.name} must be an hour from 0 to 23.")
+
+    return {
+        "api_key": api_key, "lat": lat, "lon": lon, "units": units,
+        "thresholds": thresholds,
+        "quiet_hours": parse_hours(display.get("quiet_hours", ""), "quiet_hours"),
+        "evening_starts": evening_starts,
+    }
 
 
 def fetch_weather(cfg):
@@ -63,99 +114,50 @@ def fetch_weather(cfg):
         "lat": cfg["lat"],
         "lon": cfg["lon"],
         "units": cfg["units"],
-        "exclude": "minutely,hourly,alerts",
+        "exclude": "minutely",
         "appid": cfg["api_key"],
     }
     # Error messages deliberately omit the request URL, which contains the API key
     try:
         resp = requests.get(ONE_CALL_URL, params=params, timeout=30)
     except requests.RequestException as e:
-        raise StationError(f"Could not reach OpenWeather ({type(e).__name__}). Check the network connection.") from None
+        raise FetchError(f"Could not reach OpenWeather ({type(e).__name__}). Check the network connection.") from None
     if resp.status_code == 401:
         raise StationError(
             "OpenWeather rejected the API key (401). One Call API 3.0 needs its own subscription on your "
             "account, and new keys can take a couple of hours to activate."
         )
     if resp.status_code != 200:
-        raise StationError(f"OpenWeather returned HTTP {resp.status_code}.")
+        raise FetchError(f"OpenWeather returned HTTP {resp.status_code}.")
     return resp.json()
 
 
-def fit_line(draw, text, font, max_width, force_ellipsis=False):
-    """Trim text with an ellipsis until it fits max_width."""
-    if not force_ellipsis and draw.textlength(text, font=font) <= max_width:
-        return text
-    while text and draw.textlength(text + "…", font=font) > max_width:
-        text = text[:-1].rstrip()
-    return text + "…"
+def save_cache(data, fetched_at):
+    tmp = CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"fetched_at": fetched_at.timestamp(), "data": data}))
+    os.replace(tmp, CACHE_PATH)  # atomic, so a power cut never leaves a half-written cache
 
 
-def draw_wrapped(draw, text, xy, font, max_width, max_lines):
-    """Word-wrap text into at most max_lines lines, ending in an ellipsis if it doesn't all fit."""
-    lines, current = [], ""
-    for word in text.split():
-        candidate = f"{current} {word}".strip()
-        if current and draw.textlength(candidate, font=font) > max_width:
-            lines.append(current)
-            current = word
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-
-    truncated = len(lines) > max_lines
-    lines = lines[:max_lines]
-    x, y = xy
-    for i, line in enumerate(lines):
-        is_last = i == len(lines) - 1
-        draw.text((x, y), fit_line(draw, line, font, max_width, force_ellipsis=truncated and is_last), font=font, fill=0)
-        y += font.size + 2
+def load_cache():
+    try:
+        cached = json.loads(CACHE_PATH.read_text())
+        return cached["data"], datetime.fromtimestamp(cached["fetched_at"], timezone.utc)
+    except (OSError, ValueError, KeyError):
+        return None, None
 
 
-def render(data, units, updated_at):
-    """Draw the forecast as a 1-bit landscape image."""
-    font_title = ImageFont.truetype(str(FONT_BOLD), 25)
-    font_text = ImageFont.truetype(str(FONT_REGULAR), 21)
-    font_small = ImageFont.truetype(str(FONT_REGULAR), 12)
-
-    image = Image.new("1", (WIDTH, HEIGHT), 255)  # 255 = white
-    draw = ImageDraw.Draw(image)
-    symbol = UNIT_SYMBOLS[units]
-    current, daily = data["current"], data["daily"]
-
-    def temp(value):
-        return f"{round(value)}{symbol}"
-
-    def conditions(day):
-        return day["weather"][0]["description"].capitalize()
-
-    # Top row: current temperature, then today's range and conditions
-    draw.text((0, 0), "Now", font=font_title, fill=0)
-    draw.text((0, 30), temp(current["temp"]), font=font_text, fill=0)
-
-    draw.text((100, 0), "Today", font=font_title, fill=0)
-    today_high = f"High: {temp(daily[0]['temp']['max'])}"
-    draw.text((100, 30), today_high, font=font_text, fill=0)
-    # Low normally sits at x=225 but shifts right when a triple-digit high needs the room
-    low_x = max(225, 100 + draw.textlength(today_high, font=font_text) + 12)
-    draw.text((low_x, 30), f"Low: {temp(daily[0]['temp']['min'])}", font=font_text, fill=0)
-    draw_wrapped(draw, conditions(daily[0]), (100, 60), font_text, max_width=WIDTH - 100, max_lines=1)
-
-    # Bottom row: the next two days
-    for x, label, day in ((0, "Tomorrow", daily[1]), (180, "Next Day", daily[2])):
-        draw.text((x, 95), label, font=font_title, fill=0)
-        draw.text((x, 125), f"High: {temp(day['temp']['max'])}", font=font_text, fill=0)
-        draw.text((x, 150), f"Low: {temp(day['temp']['min'])}", font=font_text, fill=0)
-        draw_wrapped(draw, conditions(day), (x, 175), font_text, max_width=170, max_lines=2)
-
-    # Section dividers
-    draw.line((0, 90, WIDTH, 90), fill=0, width=2)
-    draw.line((85, 0, 85, 90), fill=0, width=2)
-    draw.line((175, 90, 175, 220), fill=0, width=2)
-
-    stamp = f"Last updated: {updated_at:%-m/%-d/%Y %-I:%M %p}"
-    draw.text(((WIDTH - draw.textlength(stamp, font=font_small)) / 2, 224), stamp, font=font_small, fill=0)
-    return image
+def get_forecast(cfg, now):
+    """Return (data, offline_since). Falls back to the cached forecast when OpenWeather is unreachable."""
+    try:
+        data = fetch_weather(cfg)
+    except FetchError as e:
+        data, fetched_at = load_cache()
+        if data is None:
+            raise
+        log.warning("%s Showing the forecast from %s.", e, fetched_at.astimezone().strftime("%-m/%-d %-I:%M %p"))
+        return data, fetched_at
+    save_cache(data, now)
+    return data, None
 
 
 def show_on_display(image, deep_clean=False):
@@ -181,11 +183,16 @@ def show_on_display(image, deep_clean=False):
         epd.sleep()  # cuts panel power; leaving it powered can damage the display
 
 
+def fingerprint(image):
+    return hashlib.sha256(image.tobytes()).hexdigest()
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--preview", metavar="PNG", help="save the rendered screen to an image instead of the display")
     parser.add_argument("--demo", action="store_true", help="use sample_data.json instead of calling OpenWeather")
     parser.add_argument("--deep-clean", action="store_true", help="cycle the panel black and white before drawing")
+    parser.add_argument("--force", action="store_true", help="update even during quiet hours or when nothing changed")
     return parser.parse_args(argv)
 
 
@@ -194,26 +201,38 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     # Cron can start a run while a slow one is still refreshing the panel; never drive it twice at once
-    lock = open(LOCK_PATH, "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log.warning("Another update is still running; skipping this one.")
-        return 0
+    with open(LOCK_PATH, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.warning("Another update is still running; skipping this one.")
+            return 0
+        return run(args)
 
-    # Fetch and render before touching the panel, so a failed fetch leaves the last good forecast on screen
+
+def run(args):
+    # Fetch and render before touching the panel, so a failure never blanks the screen
     try:
         if args.demo:
-            data, units = json.loads(SAMPLE_PATH.read_text()), "imperial"
+            data = json.loads(SAMPLE_PATH.read_text())
+            # The sample is a fixed moment, so the demo renders identically every time
+            now = datetime.fromtimestamp(data["current"]["dt"], timezone.utc)
+            image = layout.render(data, "imperial", DEFAULT_THRESHOLDS["imperial"], now)
         else:
             cfg = load_config(CONFIG_PATH)
-            data, units = fetch_weather(cfg), cfg["units"]
-        image = render(data, units, datetime.now())
+            now = datetime.now(timezone.utc)
+            quiet = cfg["quiet_hours"]
+            if quiet and in_hours(now.astimezone().hour, quiet) and not (args.force or args.deep_clean or args.preview):
+                log.info("Quiet hours (%d:00-%d:00); leaving the display alone.", *quiet)
+                return 0
+            data, offline_since = get_forecast(cfg, now)
+            image = layout.render(data, cfg["units"], cfg["thresholds"], now,
+                                  evening_starts=cfg["evening_starts"], offline_since=offline_since)
     except StationError as e:
         log.error("%s", e)
         return 1
     except (KeyError, IndexError, TypeError) as e:
-        log.error("Unexpected response format from OpenWeather (missing %s).", e)
+        log.error("Unexpected forecast data format (missing %s).", e)
         return 1
 
     if args.preview:
@@ -221,7 +240,13 @@ def main(argv=None):
         log.info("Saved preview to %s", args.preview)
         return 0
 
+    # While offline the screen often wouldn't change; skip the refresh flash when it's identical
+    shown = fingerprint(image)
+    if not (args.force or args.deep_clean) and SHOWN_PATH.exists() and SHOWN_PATH.read_text() == shown:
+        log.info("Screen unchanged; skipping refresh.")
+        return 0
     show_on_display(image, deep_clean=args.deep_clean)
+    SHOWN_PATH.write_text(shown)
     log.info("Display updated.")
     return 0
 

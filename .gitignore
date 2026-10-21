@@ -1,7 +1,10 @@
-# Local settings (API key, location)
+# Local settings (API key, location) and runtime state
 config.ini
-
+last_forecast.json
+last_forecast.tmp
+.last_display
 .update.lock
+
 __pycache__/
 *.pyc
 *.swp

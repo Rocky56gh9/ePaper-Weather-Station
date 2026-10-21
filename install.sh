@@ -47,9 +47,9 @@ else
         until [[ "$lat" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; do read -rp "Decimal number, please. Latitude: " lat; done
         read -rp "Longitude (e.g. -0.13): " lon
         until [[ "$lon" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; do read -rp "Decimal number, please. Longitude: " lon; done
-        read -rp "Units: imperial, metric, or standard [imperial]: " units
+        read -rp "Units: imperial or metric [imperial]: " units
         units="${units:-imperial}"
-        until [[ "$units" =~ ^(imperial|metric|standard)$ ]]; do read -rp "imperial, metric, or standard: " units; done
+        until [[ "$units" =~ ^(imperial|metric)$ ]]; do read -rp "imperial or metric: " units; done
         sed -i -e "s/^api_key = .*/api_key = $api_key/" \
                -e "s/^latitude = .*/latitude = $lat/" \
                -e "s/^longitude = .*/longitude = $lon/" \
