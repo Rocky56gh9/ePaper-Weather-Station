@@ -1,6 +1,7 @@
-"""Draws the station's screen: a 360x240 1-bit image built from a One Call API 3.0 response.
+"""Draws the station's screen from a One Call API 3.0 response.
 
-Screen regions (landscape):
+Positions are written for the original 360x240 design and scaled to the target screen's width;
+any extra height goes to the 12-hour chart. Screen regions (landscape):
 
     +-------------------+----------------------+
     | icon  64°         |  Thu    Fri    Sat   |  Now / Tonight      |  next three days
@@ -8,11 +9,14 @@ Screen regions (landscape):
     | ↑64°  ↓45°        |  67°    57°    59°   |
     | Clear sky         |  44°    42°    38°   |
     | 💧80%  🌬24mph    |         💧35%        |
-    +-------------------+----------------------+ y=140
+    +-------------------+----------------------+
     |  next 12 hours: temperature line over rain-chance bars    |
-    +-----------------------------------------------------------+ y=216
+    +-----------------------------------------------------------+
     | sunrise-sunset or "colder tomorrow"    Updated 4:19 PM    |  or an alert/offline banner
     +-----------------------------------------------------------+
+
+Images use a three-entry palette (white, black, accent). On black-and-white screens the
+accent is drawn as black; on Inky red or yellow screens it marks alerts, rain, and big changes.
 """
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -20,13 +24,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-WIDTH, HEIGHT = 360, 240
+DESIGN_WIDTH = 360
 FONT_DIR = Path(__file__).resolve().parent / "fonts"
 WIND_UNITS = {"imperial": "mph", "metric": "m/s"}
 
-LEFT_PANEL_RIGHT = 172
-TOP_ROW_BOTTOM = 140
-FOOTER_TOP = 216
+# Palette indices; they match Pimoroni Inky's WHITE, BLACK, and RED/YELLOW
+WHITE, BLACK, ACCENT = 0, 1, 2
+ACCENT_RGB = {"red": (220, 0, 0), "yellow": (230, 190, 0)}
 
 # Weather Icons font codepoints (https://erikflowers.github.io/weather-icons/)
 GLYPHS = {
@@ -63,25 +67,57 @@ def weather_glyph(condition_id, night=False):
     return GLYPHS["cloudy"]
 
 
-def fit_line(draw, text, fnt, max_width, force_ellipsis=False):
-    """Trim text with an ellipsis until it fits max_width."""
-    if not force_ellipsis and draw.textlength(text, font=fnt) <= max_width:
-        return text
-    while text and draw.textlength(text + "…", font=fnt) > max_width:
-        text = text[:-1].rstrip()
-    return text + "…"
-
-
-def draw_centered(draw, text, center_x, y, fnt, fill=0):
-    draw.text((center_x - draw.textlength(text, font=fnt) / 2, y), text, font=fnt, fill=fill)
-
-
 def deg(value):
     return f"{round(value)}°"
 
 
 def clock(dt):
     return dt.strftime("%-I:%M %p")
+
+
+class Canvas:
+    """A palette image plus drawing helpers that take coordinates in 360-wide design units."""
+
+    def __init__(self, width, height, accent=None):
+        self.width, self.height = width, height
+        self.scale = width / DESIGN_WIDTH
+        self.accent = ACCENT if accent else BLACK
+        self.image = Image.new("P", (width, height), WHITE)
+        self.image.putpalette([255, 255, 255, 0, 0, 0, *ACCENT_RGB.get(accent, (0, 0, 0))] + [0, 0, 0] * 253)
+        self.draw = ImageDraw.Draw(self.image)
+
+        self.left_panel_right = self.px(172)
+        self.top_row_bottom = self.px(140)
+        self.footer_top = height - self.px(24)
+
+    def px(self, value):
+        return round(value * self.scale)
+
+    def font(self, kind, size):
+        return font(kind, self.px(size))
+
+    def text_width(self, text, kind, size):
+        return self.draw.textlength(text, font=self.font(kind, size))
+
+    def text(self, xy, text, kind, size, fill=BLACK):
+        """Draw text at a position in design units."""
+        self.draw.text((self.px(xy[0]), self.px(xy[1])), text, font=self.font(kind, size), fill=fill)
+
+    def text_at(self, xy, text, kind, size, fill=BLACK):
+        """Draw text at a position already in screen pixels."""
+        self.draw.text(xy, text, font=self.font(kind, size), fill=fill)
+
+    def centered(self, text, center_x, y, kind, size, fill=BLACK):
+        """center_x in screen pixels, y in design units."""
+        self.text_at((center_x - self.text_width(text, kind, size) / 2, self.px(y)), text, kind, size, fill)
+
+    def fit(self, text, kind, size, max_width, force_ellipsis=False):
+        """Trim text with an ellipsis until it fits max_width screen pixels."""
+        if not force_ellipsis and self.text_width(text, kind, size) <= max_width:
+            return text
+        while text and self.text_width(text + "…", kind, size) > max_width:
+            text = text[:-1].rstrip()
+        return text + "…"
 
 
 class Forecast:
@@ -135,66 +171,69 @@ def notable_conditions(fc, units, thresholds, evening):
     return notes
 
 
-def draw_now_panel(draw, fc, units, thresholds, evening):
+def draw_now_panel(c, fc, units, thresholds, evening):
     current = fc.current
+    panel_right = c.left_panel_right
+
     # Icons vary in width (sun vs. cloud-and-sun), so fit each into a fixed box. The gap before the
     # temperature matters: a sun ray touching "48°" reads as "-48°".
     glyph, icon_size = weather_glyph(current["weather"][0]["id"], fc.is_night), 54
-    while draw.textlength(glyph, font=font("icons", icon_size)) > 68:
+    while c.text_width(glyph, "icons", icon_size) > c.px(68):
         icon_size -= 2
-    draw.text((4, (54 - icon_size) // 2), glyph, font=font("icons", icon_size), fill=0)
+    c.text((4, (54 - icon_size) / 2), glyph, "icons", icon_size)
 
     # Shrink the big temperature until it fits beside the icon (triple digits, negatives)
     temp_x, temp_text, size = 86, deg(current["temp"]), 44
-    while size > 28 and draw.textlength(temp_text, font=font("bold", size)) > LEFT_PANEL_RIGHT - 4 - temp_x:
+    while size > 28 and c.text_width(temp_text, "bold", size) > panel_right - c.px(4 + temp_x):
         size -= 2
-    draw.text((temp_x, 4 + (44 - size) // 2), temp_text, font=font("bold", size), fill=0)
-    draw.text((temp_x + 2, 54), f"Feels {deg(current['feels_like'])}", font=font("regular", 14), fill=0)
+    c.text((temp_x, 4 + (44 - size) / 2), temp_text, "bold", size)
+    c.text((temp_x + 2, 54), f"Feels {deg(current['feels_like'])}", "regular", 14)
 
     if evening:
         low = min((h["temp"] for h in fc.hours), default=fc.today["temp"]["min"])
         summary = f"Tonight ↓{deg(low)}"
     else:
         summary = f"↑{deg(fc.today['temp']['max'])}  ↓{deg(fc.today['temp']['min'])}"
-    draw.text((6, 78), summary, font=font("bold", 17), fill=0)
+    c.text((6, 78), summary, "bold", 17)
 
     description = current["weather"][0]["description"].capitalize()
-    draw.text((6, 100), fit_line(draw, description, font("regular", 15), LEFT_PANEL_RIGHT - 12), font=font("regular", 15), fill=0)
+    c.text((6, 100), c.fit(description, "regular", 15, panel_right - c.px(12)), "regular", 15)
 
-    x = 6
+    x = c.px(6)
     for glyph, text in notable_conditions(fc, units, thresholds, evening):
-        width = (18 if glyph else 0) + draw.textlength(text, font=font("bold", 14))
-        if x + width > LEFT_PANEL_RIGHT - 4:
+        width = (c.px(18) if glyph else 0) + c.text_width(text, "bold", 14)
+        if x + width > panel_right - c.px(4):
             break
         if glyph:
-            draw.text((x, 118), glyph, font=font("icons", 16), fill=0)
-            x += 18
-        draw.text((x, 120), text, font=font("bold", 14), fill=0)
-        x += draw.textlength(text, font=font("bold", 14)) + 10
+            c.text_at((x, c.px(118)), glyph, "icons", 16, fill=c.accent if glyph == GLYPHS["raindrop"] else BLACK)
+            x += c.px(18)
+        c.text_at((x, c.px(120)), text, "bold", 14)
+        x += c.text_width(text, "bold", 14) + c.px(10)
 
 
-def draw_next_days(draw, fc):
-    column = (WIDTH - LEFT_PANEL_RIGHT) / 3
+def draw_next_days(c, fc):
+    column = (c.width - c.left_panel_right) / 3
     for i, day in enumerate(fc.next_days):
-        cx = LEFT_PANEL_RIGHT + column * i + column / 2
-        draw_centered(draw, fc.local(day["dt"]).strftime("%a"), cx, 2, font("bold", 15))
-        draw_centered(draw, weather_glyph(day["weather"][0]["id"]), cx, 18, font("icons", 30))
-        draw_centered(draw, deg(day["temp"]["max"]), cx, 72, font("bold", 17))
-        draw_centered(draw, deg(day["temp"]["min"]), cx, 93, font("regular", 15))
+        cx = c.left_panel_right + column * i + column / 2
+        c.centered(fc.local(day["dt"]).strftime("%a"), cx, 2, "bold", 15)
+        c.centered(weather_glyph(day["weather"][0]["id"]), cx, 18, "icons", 30)
+        c.centered(deg(day["temp"]["max"]), cx, 72, "bold", 17)
+        c.centered(deg(day["temp"]["min"]), cx, 93, "regular", 15)
         if day.get("pop", 0) >= 0.1:
             pct = f"{round(day['pop'] * 100)}%"
-            width = 14 + draw.textlength(pct, font=font("regular", 13))
-            draw.text((cx - width / 2, 116), GLYPHS["raindrop"], font=font("icons", 14), fill=0)
-            draw.text((cx - width / 2 + 14, 118), pct, font=font("regular", 13), fill=0)
+            left = cx - (c.px(14) + c.text_width(pct, "regular", 13)) / 2
+            c.text_at((left, c.px(116)), GLYPHS["raindrop"], "icons", 14, fill=c.accent)
+            c.text_at((left + c.px(14), c.px(118)), pct, "regular", 13)
 
 
-def draw_hourly(image, draw, fc):
-    """Temperature line over dithered rain-chance bars for the next 12 hours."""
+def draw_hourly(c, fc):
+    """Temperature line over rain-chance bars for the next 12 hours."""
     hours = fc.hours
+    top, bottom = c.top_row_bottom + c.px(12), c.footer_top - c.px(16)
+    left, right = c.px(8), c.width - c.px(8)
     if len(hours) < 2:
-        draw_centered(draw, "No hourly forecast available", WIDTH / 2, 170, font("regular", 13))
+        c.centered("No hourly forecast available", c.width / 2, top / c.scale + 18, "regular", 13)
         return
-    top, bottom, left, right = 152, 200, 8, WIDTH - 8
     step = (right - left) / len(hours)
     temps = [h["temp"] for h in hours]
     t_min, t_max = min(temps), max(temps)
@@ -205,40 +244,42 @@ def draw_hourly(image, draw, fc):
         x0 = left + i * step
         pop = hour.get("pop", 0)
         if pop >= 0.05:
-            # A checkerboard reads as gray on a 1-bit panel, so the temperature line stays visible on top
-            bar_top = int(bottom - (bottom - top) * pop)
-            for y in range(bar_top, bottom):
-                for x in range(int(x0 + 3), int(x0 + step - 3)):
-                    if (x + y) % 2 == 0:
-                        image.putpixel((x, y), 0)
-        y = bottom - 6 - (hour["temp"] - t_min) / span * (bottom - top - 14)
+            bar = (int(x0 + c.px(3)), int(bottom - (bottom - top) * pop), int(x0 + step - c.px(3)), bottom - 1)
+            if c.accent == ACCENT:
+                c.draw.rectangle(bar, fill=ACCENT)
+            else:
+                # A checkerboard reads as gray on a 1-bit panel, so the temperature line stays visible on top
+                for y in range(bar[1], bar[3] + 1):
+                    for x in range(bar[0], bar[2]):
+                        if (x + y) % 2 == 0:
+                            c.image.putpixel((x, y), BLACK)
+        y = bottom - c.px(6) - (hour["temp"] - t_min) / span * (bottom - top - c.px(14))
         points.append((x0 + step / 2, y))
         if i % 3 == 0:
             label = fc.local(hour["dt"]).strftime("%-I%p").lower().rstrip("m")
-            draw_centered(draw, label, x0 + step / 2, bottom + 2, font("regular", 11))
-    draw.line(points, fill=0, width=2)
-    draw.line((left, bottom, right, bottom), fill=0, width=1)
+            c.centered(label, x0 + step / 2, (bottom + c.px(2)) / c.scale, "regular", 11)
+    c.draw.line(points, fill=BLACK, width=c.px(2))
+    c.draw.line((left, bottom, right, bottom), fill=BLACK, width=1)
 
     # Label the high and low just above the line; the low sits on the axis, so below would hit the hour labels
     labels = [t_max] if t_max == t_min else [t_max, t_min]
     for value in labels:
         x, y = points[temps.index(value)]
-        draw.text((min(max(x - 10, 0), WIDTH - 30), y - 15), deg(value), font=font("bold", 11), fill=0)
+        c.text_at((min(max(x - c.px(10), 0), c.width - c.px(30)), y - c.px(15)), deg(value), "bold", 11)
 
 
-def draw_banner(draw, text, suffix=""):
-    """White-on-black footer. When space runs out, text is shortened and suffix is always kept whole."""
-    draw.rectangle((0, FOOTER_TOP, WIDTH, HEIGHT), fill=0)
-    fnt = font("bold", 13)
-    room = WIDTH - 12 - draw.textlength(suffix, font=fnt)
-    draw_centered(draw, fit_line(draw, text, fnt, room) + suffix, WIDTH / 2, FOOTER_TOP + 5, fnt, fill=255)
+def draw_banner(c, text, suffix="", fill=BLACK):
+    """White-on-color footer. When space runs out, text is shortened and suffix is always kept whole."""
+    c.draw.rectangle((0, c.footer_top, c.width, c.height), fill=fill)
+    room = c.width - c.px(12) - c.text_width(suffix, "bold", 13)
+    c.centered(c.fit(text, "bold", 13, room) + suffix, c.width / 2, c.footer_top / c.scale + 5, "bold", 13, fill=WHITE)
 
 
-def draw_footer(draw, fc, thresholds, updated_at, offline_since):
+def draw_footer(c, fc, thresholds, updated_at, offline_since):
     if offline_since:
         since = fc.local(offline_since.timestamp())
         when = clock(since) if since.date() == fc.now.date() else since.strftime("%a ") + clock(since)
-        draw_banner(draw, f"OFFLINE · forecast from {when}")
+        draw_banner(c, f"OFFLINE · forecast from {when}")
         return
 
     alerts = fc.active_alerts()
@@ -247,38 +288,37 @@ def draw_footer(draw, fc, thresholds, updated_at, offline_since):
         suffix = f" until {fc.local(first['end']).strftime('%-I %p')}"
         if len(alerts) > 1:
             suffix += f" (+{len(alerts) - 1})"
-        draw_banner(draw, f"⚠ {first['event']}", suffix)
+        draw_banner(c, f"⚠ {first['event']}", suffix, fill=c.accent)
         return
 
-    y = FOOTER_TOP + 5
+    y = c.footer_top / c.scale + 5
     swing = fc.next_days[0]["temp"]["max"] - fc.today["temp"]["max"] if fc.next_days else 0
     if abs(swing) >= thresholds["temp_swing"]:
         word = "warmer" if swing > 0 else "colder"
-        draw.text((6, y - 1), f"{'↑' if swing > 0 else '↓'}{deg(abs(swing))} {word} tomorrow", font=font("bold", 13), fill=0)
+        c.text((6, y - 1), f"{'↑' if swing > 0 else '↓'}{deg(abs(swing))} {word} tomorrow", "bold", 13, fill=c.accent)
     else:
         sunrise, sunset = fc.local(fc.today["sunrise"]), fc.local(fc.today["sunset"])
-        draw.text((6, y - 5), GLYPHS["sunrise"], font=font("icons", 18), fill=0)
-        draw.text((30, y), f"{sunrise:%-I:%M}–{sunset:%-I:%M}", font=font("regular", 12), fill=0)
+        c.text((6, y - 5), GLYPHS["sunrise"], "icons", 18)
+        c.text((30, y), f"{sunrise:%-I:%M}–{sunset:%-I:%M}", "regular", 12)
 
     stamp = f"Updated {clock(fc.local(updated_at.timestamp()))}"
-    draw.text((WIDTH - 6 - draw.textlength(stamp, font=font("regular", 12)), y), stamp, font=font("regular", 12), fill=0)
+    c.text_at((c.width - c.px(6) - c.text_width(stamp, "regular", 12), c.px(y)), stamp, "regular", 12)
 
 
-def render(data, units, thresholds, now, evening_starts=18, offline_since=None):
-    """Draw the full screen.
+def render(data, units, thresholds, now, size=(360, 240), accent=None, evening_starts=18, offline_since=None):
+    """Draw the full screen as a palette image (white, black, accent).
 
     now and offline_since are timezone-aware datetimes. offline_since marks the data as a cached
-    forecast and replaces the footer with an offline banner.
+    forecast and replaces the footer with an offline banner. accent is "red", "yellow", or None.
     """
     fc = Forecast(data, now)
     evening = fc.now.hour >= evening_starts
 
-    image = Image.new("1", (WIDTH, HEIGHT), 255)  # 255 = white
-    draw = ImageDraw.Draw(image)
-    draw_now_panel(draw, fc, units, thresholds, evening)
-    draw_next_days(draw, fc)
-    draw.line((LEFT_PANEL_RIGHT, 0, LEFT_PANEL_RIGHT, TOP_ROW_BOTTOM), fill=0, width=2)
-    draw.line((0, TOP_ROW_BOTTOM, WIDTH, TOP_ROW_BOTTOM), fill=0, width=2)
-    draw_hourly(image, draw, fc)
-    draw_footer(draw, fc, thresholds, updated_at=now, offline_since=offline_since)
-    return image
+    c = Canvas(*size, accent=accent)
+    draw_now_panel(c, fc, units, thresholds, evening)
+    draw_next_days(c, fc)
+    c.draw.line((c.left_panel_right, 0, c.left_panel_right, c.top_row_bottom), fill=BLACK, width=c.px(2))
+    c.draw.line((0, c.top_row_bottom, c.width, c.top_row_bottom), fill=BLACK, width=c.px(2))
+    draw_hourly(c, fc)
+    draw_footer(c, fc, thresholds, updated_at=now, offline_since=offline_since)
+    return c.image

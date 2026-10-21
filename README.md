@@ -1,13 +1,16 @@
 # ePaper Weather Station
 
-A small, always-on weather display you can mount anywhere. Every 15 minutes, a Raspberry Pi Zero pulls the forecast from OpenWeather and draws it on a Waveshare 3.52" e-Paper screen: current conditions with icons, a 3-day outlook, the next 12 hours of temperature and rain, and any active weather warnings. E-paper holds its image with no power, so the screen stays readable between updates and through network outages.
+A small, always-on weather display you can mount anywhere. Every 15 minutes, a Raspberry Pi Zero pulls the forecast from OpenWeather and draws it on an e-Paper screen (a Waveshare 3.52" HAT or a Pimoroni Inky wHAT): current conditions with icons, a 3-day outlook, the next 12 hours of temperature and rain, and any active weather warnings. E-paper holds its image with no power, so the screen stays readable between updates and through network outages.
 
 <p>
   <img src="docs/preview.png" alt="Morning screen: partly cloudy, 48 degrees, rain likely this afternoon" width="49%">
   <img src="docs/preview-evening-alert.png" alt="Evening screen: thunderstorm with a severe thunderstorm warning banner" width="49%">
 </p>
 
-<img src="https://github.com/user-attachments/assets/b574e333-42d7-4eb8-a791-5b9926c1b199" alt="The original weather station mounted on a wall" width="49%">
+<p>
+  <img src="docs/preview-inky.png" alt="The same screen on an Inky wHAT, with rain chance in red" width="49%">
+  <img src="https://github.com/user-attachments/assets/b574e333-42d7-4eb8-a791-5b9926c1b199" alt="The original weather station mounted on a wall" width="49%">
+</p>
 
 ## What's on the screen
 
@@ -27,9 +30,18 @@ The station makes one API call per update and stays well within OpenWeather's fr
 | --- | --- |
 | Raspberry Pi Zero W or Zero 2 W | Any Pi with a 40-pin header and Wi-Fi works. |
 | microSD card, 8 GB or larger | |
-| [Waveshare 3.52" e-Paper HAT](https://www.waveshare.com/3.52inch-e-paper-hat.htm) | Monochrome, 360 × 240. Plugs straight onto the GPIO header. |
+| A supported display (see below) | Plugs straight onto the GPIO header. |
 | OpenWeather account | Free. See step 1. |
 | Case | Optional. The Adafruit Pi Zero case fits. |
+
+### Supported displays
+
+| Display | Resolution | Colors | `screen =` |
+| --- | --- | --- | --- |
+| [Waveshare 3.52" e-Paper HAT](https://www.waveshare.com/3.52inch-e-paper-hat.htm) | 360 × 240 | Black, white | `waveshare_3in52` |
+| [Pimoroni Inky wHAT](https://shop.pimoroni.com/products/inky-what) | 400 × 300 | Black, white, and red or yellow (black-and-white also works) | `inky_what` |
+
+The layout scales to each screen; on the Inky wHAT the extra height goes to the 12-hour chart. On red or yellow boards, the accent color marks rain, weather alerts, and big temperature swings. Color e-paper refreshes more slowly than black and white, so expect a longer flashing sequence on the Inky.
 
 ## Setup
 
@@ -65,7 +77,9 @@ cd ePaper-Weather-Station
 The installer:
 
 - installs the Python packages from Raspberry Pi OS,
-- enables SPI,
+- asks which display is attached,
+- enables SPI (and for the Inky wHAT, I2C plus the `spi0-0cs` boot overlay, after backing up `config.txt`),
+- installs Pimoroni's `inky` library into a project virtual environment when you use an Inky,
 - asks for your API key, latitude, longitude, and units, and saves them to `config.ini`,
 - schedules an update every 15 minutes and a deep clean at 1:10am,
 - draws the first forecast.
@@ -80,6 +94,8 @@ Edit `config.ini` with `nano config.ini`. Changes apply at the next update.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
+| `screen` | `waveshare_3in52` | Which display is attached: `waveshare_3in52` or `inky_what`. Rerun `./install.sh` after changing it. |
+| `rotate` | `0` | `180` if the display is mounted upside down. |
 | `units` | `imperial` | `imperial` (°F, mph) or `metric` (°C, m/s). |
 | `quiet_hours` | `0-5` | Hours to leave the display alone, as start-end on a 24-hour clock. `23-6` works too. Leave blank to update around the clock. |
 | `evening_starts` | `18` | Hour the top-left panel switches from today to tonight. |
@@ -109,7 +125,7 @@ pip install pillow requests
 python3 weather_station.py --demo --preview preview.png
 ```
 
-`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. The layout lives in `layout.py`. The canvas is 360 × 240 pixels, and black and white are the only colors. Icons come from the [Weather Icons](https://erikflowers.github.io/weather-icons/) font, where each icon is a character.
+`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. Add `--screen inky_what` to preview the Inky layout. The layout lives in `layout.py`, with positions written for the 360 × 240 design and scaled to each screen. Images use three palette colors: white, black, and an accent that black-and-white screens draw as black. Icons come from the [Weather Icons](https://erikflowers.github.io/weather-icons/) font, where each icon is a character.
 
 Run the tests after changes:
 
@@ -125,12 +141,15 @@ python3 -m unittest discover tests
 | `No such file or directory: '/dev/spidev0.0'` | SPI is off. Run `sudo raspi-config nonint do_spi 0`, then reboot. |
 | Display never changes | Check `journalctl -t epaper-weather` for errors, and confirm you're outside your quiet hours. Then check that the HAT is fully seated on all 40 pins. |
 | `config.ini not found` | Run `./install.sh`, or `cp config.example.ini config.ini` and edit it. |
+| Inky: `Chip Select: (line 8, GPIO8) currently claimed by spi0 CS0` | Add `dtoverlay=spi0-0cs` to `/boot/firmware/config.txt` (or `/boot/config.txt` on older systems) and reboot. `install.sh` does this for you. |
+| Inky: `No EEPROM detected!` | Check that I2C is on (`sudo raspi-config nonint do_i2c 0`) and the board is fully seated, then reboot. |
 
 ## Project layout
 
 ```
 weather_station.py   fetching, caching, scheduling rules, and the display driver calls
-layout.py            draws the screen
+layout.py            draws the screen at any supported size
+displays/            one driver per supported screen
 install.sh           one-time setup on the Pi
 config.example.ini   settings template (config.ini is created from it and git-ignored)
 sample_data.json     fixed sample forecast for --demo and the tests

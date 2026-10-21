@@ -23,7 +23,8 @@ jobs:
       - run: bash -n install.sh
       - run: python -m unittest discover tests -v
       - run: python weather_station.py --demo --preview preview.png
+      - run: python weather_station.py --demo --screen inky_what --preview preview-inky.png
       - uses: actions/upload-artifact@v7
         with:
           name: preview-python${{ matrix.python }}
-          path: preview.png
+          path: preview*.png

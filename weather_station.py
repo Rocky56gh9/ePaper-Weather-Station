@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Show current conditions, the next 12 hours, and a 3-day forecast on a Waveshare 3.52" e-Paper display.
+"""Show current conditions, the next 12 hours, and a 3-day forecast on an e-Paper display.
 
     python3 weather_station.py                          fetch weather and update the display
     python3 weather_station.py --deep-clean             cycle the panel black/white first (nightly)
     python3 weather_station.py --force                  update even during quiet hours
     python3 weather_station.py --preview out.png        render to a PNG instead of the display
     python3 weather_station.py --demo --preview out.png use bundled sample data; no API key or hardware
+    python3 weather_station.py --demo --screen inky_what --preview out.png   preview another screen
 """
 import argparse
 import configparser
@@ -21,6 +22,7 @@ from pathlib import Path
 import requests
 
 import layout
+from displays import SCREENS, show
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.ini"
@@ -100,12 +102,20 @@ def load_config(path):
         evening_starts = int(display.get("evening_starts", "18").strip() or 18)
     except ValueError:
         raise StationError(f"evening_starts in {path.name} must be an hour from 0 to 23.")
+    screen = display.get("screen", "waveshare_3in52").strip() or "waveshare_3in52"
+    if screen not in SCREENS:
+        raise StationError(f"screen in {path.name} must be one of: {', '.join(SCREENS)}.")
+    rotate = display.get("rotate", "0").strip() or "0"
+    if rotate not in ("0", "180"):
+        raise StationError(f"rotate in {path.name} must be 0 or 180.")
 
     return {
         "api_key": api_key, "lat": lat, "lon": lon, "units": units,
         "thresholds": thresholds,
         "quiet_hours": parse_hours(display.get("quiet_hours", ""), "quiet_hours"),
         "evening_starts": evening_starts,
+        "screen": screen,
+        "rotate": int(rotate),
     }
 
 
@@ -160,29 +170,6 @@ def get_forecast(cfg, now):
     return data, None
 
 
-def show_on_display(image, deep_clean=False):
-    # Imported here so --preview works on machines without the display or GPIO libraries
-    from waveshare_epd import epd3in52
-
-    epd = epd3in52.EPD()
-    try:
-        epd.init()
-        if deep_clean:
-            # Full black/white cycles exercise every pixel and clear ghosting from the static layout
-            frame_bytes = epd.width * epd.height // 8
-            for _ in range(2):
-                for fill in (0x00, 0xFF):
-                    epd.send_command(0x13)  # start frame data
-                    epd.send_data2([fill] * frame_bytes)
-                    epd.lut_GC()
-                    epd.refresh()
-        epd.display(epd.getbuffer(image))
-        epd.lut_GC()
-        epd.refresh()
-    finally:
-        epd.sleep()  # cuts panel power; leaving it powered can damage the display
-
-
 def fingerprint(image):
     return hashlib.sha256(image.tobytes()).hexdigest()
 
@@ -193,6 +180,7 @@ def parse_args(argv):
     parser.add_argument("--demo", action="store_true", help="use sample_data.json instead of calling OpenWeather")
     parser.add_argument("--deep-clean", action="store_true", help="cycle the panel black and white before drawing")
     parser.add_argument("--force", action="store_true", help="update even during quiet hours or when nothing changed")
+    parser.add_argument("--screen", choices=SCREENS, help="render for this screen instead of the one in config.ini")
     return parser.parse_args(argv)
 
 
@@ -217,7 +205,10 @@ def run(args):
             data = json.loads(SAMPLE_PATH.read_text())
             # The sample is a fixed moment, so the demo renders identically every time
             now = datetime.fromtimestamp(data["current"]["dt"], timezone.utc)
-            image = layout.render(data, "imperial", DEFAULT_THRESHOLDS["imperial"], now)
+            screen = args.screen or "waveshare_3in52"
+            width, height, accent = SCREENS[screen]
+            image = layout.render(data, "imperial", DEFAULT_THRESHOLDS["imperial"], now, size=(width, height), accent=accent)
+            rotate = 0
         else:
             cfg = load_config(CONFIG_PATH)
             now = datetime.now(timezone.utc)
@@ -226,8 +217,11 @@ def run(args):
                 log.info("Quiet hours (%d:00-%d:00); leaving the display alone.", *quiet)
                 return 0
             data, offline_since = get_forecast(cfg, now)
-            image = layout.render(data, cfg["units"], cfg["thresholds"], now,
+            screen = args.screen or cfg["screen"]
+            width, height, accent = SCREENS[screen]
+            image = layout.render(data, cfg["units"], cfg["thresholds"], now, size=(width, height), accent=accent,
                                   evening_starts=cfg["evening_starts"], offline_since=offline_since)
+            rotate = cfg["rotate"]
     except StationError as e:
         log.error("%s", e)
         return 1
@@ -245,7 +239,7 @@ def run(args):
     if not (args.force or args.deep_clean) and SHOWN_PATH.exists() and SHOWN_PATH.read_text() == shown:
         log.info("Screen unchanged; skipping refresh.")
         return 0
-    show_on_display(image, deep_clean=args.deep_clean)
+    show(screen, image.rotate(180) if rotate == 180 else image, deep_clean=args.deep_clean)
     SHOWN_PATH.write_text(shown)
     log.info("Display updated.")
     return 0

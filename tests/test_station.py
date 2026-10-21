@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import layout  # noqa: E402
 import weather_station as ws  # noqa: E402
+from displays import SCREENS  # noqa: E402
 
 SAMPLE = json.loads((ROOT / "sample_data.json").read_text())
 logging.disable(logging.CRITICAL)
@@ -49,7 +50,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg["thresholds"]["wind"], 20)
 
     def test_rejects_bad_values(self):
-        for kwargs in ({"quiet": "5"}, {"quiet": "0-25"}, {"wind": "lots"}):
+        for kwargs in ({"quiet": "5"}, {"quiet": "0-25"}, {"wind": "lots"}, {"screen": "kindle"}, {"rotate": "90"}):
             write_config(self.path, **kwargs)
             with self.assertRaises(ws.StationError):
                 ws.load_config(self.path)
@@ -59,6 +60,8 @@ class ConfigTests(unittest.TestCase):
         cfg = ws.load_config(self.path)
         self.assertIsNone(cfg["quiet_hours"])
         self.assertEqual(cfg["evening_starts"], 18)
+        self.assertEqual(cfg["screen"], "waveshare_3in52")
+        self.assertEqual(cfg["rotate"], 0)
 
     def test_in_hours(self):
         self.assertTrue(ws.in_hours(4, (0, 5)))
@@ -80,11 +83,15 @@ class MainTests(unittest.TestCase):
             mock.patch.object(ws, "SHOWN_PATH", tmp / ".last_display"),
             mock.patch.object(ws, "LOCK_PATH", tmp / ".update.lock"),
             mock.patch.object(ws, "fetch_weather", self.fake_fetch),
-            mock.patch.object(ws, "show_on_display", lambda image, deep_clean=False: self.shown.append(deep_clean)),
+            mock.patch.object(ws, "show", self.fake_show),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+
+    def fake_show(self, screen, image, deep_clean=False):
+        self.shown.append(deep_clean)
+        self.last = (screen, image)
 
     def fake_fetch(self, cfg):
         if not self.network_up:
@@ -114,6 +121,13 @@ class MainTests(unittest.TestCase):
         self.assertEqual(ws.main([]), 1)
         self.assertEqual(self.shown, [])
 
+    def test_inky_screen_renders_at_its_size(self):
+        write_config(self.config, screen="inky_what", rotate="180")
+        self.assertEqual(ws.main([]), 0)
+        screen, image = self.last
+        self.assertEqual(screen, "inky_what")
+        self.assertEqual(image.size, (400, 300))
+
     def test_quiet_hours(self):
         hour = datetime.now().hour
         write_config(self.config, quiet=f"{hour}-{(hour + 1) % 24}")
@@ -124,12 +138,23 @@ class MainTests(unittest.TestCase):
 
 
 class LayoutTests(unittest.TestCase):
+    def test_screen_sizes_and_accent(self):
+        stormy = copy.deepcopy(SAMPLE)
+        stormy["alerts"] = [{"event": "Flood Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
+        for screen, (width, height, accent) in SCREENS.items():
+            image = layout.render(stormy, "imperial", self.T, self.NOW, size=(width, height), accent=accent)
+            self.assertEqual(image.size, (width, height))
+            used = {index for _, index in image.getcolors()}
+            # Red screens use the accent ink for rain and alerts; black-and-white screens never do
+            self.assertEqual(layout.ACCENT in used, accent is not None, screen)
+
+
     T = ws.DEFAULT_THRESHOLDS["imperial"]
     NOW = datetime.fromtimestamp(SAMPLE["current"]["dt"], timezone.utc)
 
     def render(self, data, hours=0, **kwargs):
         image = layout.render(data, "imperial", self.T, self.NOW + timedelta(hours=hours), **kwargs)
-        self.assertEqual(image.size, (layout.WIDTH, layout.HEIGHT))
+        self.assertEqual(image.size, (360, 240))
         return image
 
     def test_states_render(self):
