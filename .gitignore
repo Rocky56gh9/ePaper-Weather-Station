@@ -1,0 +1,8 @@
+# Local settings (API key, location)
+config.ini
+
+.update.lock
+__pycache__/
+*.pyc
+*.swp
+.DS_Store

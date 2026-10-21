@@ -1,0 +1,28 @@
+# Renders the demo screen on the oldest and newest supported Pillow, so layout or
+# Pillow API breakage shows up here instead of on someone's wall.
+name: Render demo
+
+on: [push, pull_request]
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python: "3.9"     # Raspberry Pi OS Bullseye
+            pillow: "8.1.2"
+          - python: "3.13"    # current Pillow
+            pillow: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install requests "pillow${{ matrix.pillow && format('=={0}', matrix.pillow) || '' }}"
+      - run: bash -n install.sh
+      - run: python weather_station.py --demo --preview preview.png
+      - uses: actions/upload-artifact@v7
+        with:
+          name: preview-python${{ matrix.python }}
+          path: preview.png

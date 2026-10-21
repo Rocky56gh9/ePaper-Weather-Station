@@ -1,0 +1,8 @@
+{
+  "current": {"temp": 52.4},
+  "daily": [
+    {"temp": {"min": 41.2, "max": 58.6}, "weather": [{"description": "light rain"}]},
+    {"temp": {"min": 44.0, "max": 61.3}, "weather": [{"description": "heavy intensity rain"}]},
+    {"temp": {"min": 47.1, "max": 64.8}, "weather": [{"description": "scattered clouds"}]}
+  ]
+}
