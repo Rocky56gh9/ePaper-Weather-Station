@@ -36,21 +36,22 @@ The larger color screen has its own layout. It shows more of the forecast, and u
 | Area | Shows |
 | --- | --- |
 | **Top left** | Current conditions icon, temperature, feels-like, and description. Before evening: today's high and low. After 6pm: tonight's low. |
-| **Top right** | A details grid: rain chance and amount, wind direction and speed with gusts, UV index, humidity, pressure and its 3-hour trend, dew point with a comfort word, sunrise and sunset, and the moon phase. |
-| **Middle** | The next **24 hours**: a temperature line over rain-chance bars, with the day name marking midnight. |
-| **Lower** | The next **7 days**: icon, high, low, and rain chance when it's 10% or more. |
-| **Footer** | OpenWeather's one-line summary of the day ("Expect a day of partly cloudy with rain"), or "↓14° colder tomorrow" for a big swing. A red banner for active government weather alerts; a black one when offline. |
+| **Top right** | A details grid: rain chance (on a blue badge from 20%) and amount, wind direction and speed with gusts (on an orange badge above your `wind` or `gusts` setting), UV index, humidity, pressure and its 3-hour trend, dew point with a comfort word, sunrise and sunset, and the moon phase. |
+| **Middle** | The next **24 hours**: a temperature line, colored by temperature, over rain-chance bars, with the day name marking midnight. |
+| **Lower** | The next **7 days**: icon, rain chance when it's 10% or more, and a bar from the low to the high on a scale shared across the week, so warm and cold spells stand out. |
+| **Footer** | OpenWeather's summary of the day, over two lines if needed ("You can expect rain in the morning, with partly cloudy in the afternoon"), or "↓14° colder tomorrow" for a big swing. A red banner for active government weather alerts, with the alert's full name and when it ends; a black one when offline. |
 
-Each color has a fixed meaning:
+On this panel, blue and green print dark, close to black, while yellow, orange, and red read as clearly colored. So the layout puts color into solid shapes (badges, bars, filled icons) rather than colored text, and each color has a fixed meaning:
 
 | Color | Means |
 | --- | --- |
-| Blue | Rain and snow (chart bars, rain chances, wet-weather icons) and cold temperatures: 40°F / 4°C or below |
-| Orange | Sun icons, warm temperatures (80°F / 27°C and up), and wind above your `wind` or `gusts` setting |
-| Red | Hot temperatures (90°F / 32°C and up) and government weather alerts |
+| Blue, green, yellow, orange, red | Temperature, on a standard weather-map scale: 40°F and below, 41–59, 60–74, 75–84, 85 and up (metric: 4°C and below, 5–15, 16–23, 24–29, 30 and up). Used for the week's bars and the 24-hour line. |
+| Blue | Rain: chart bars, the rain badge, and filled rain clouds |
+| Yellow and orange | Sun: yellow discs with orange rays. A yellow bolt marks thunderstorms. |
+| Red | Government weather alerts |
 | Green, yellow, orange, red | The UV index badge: low, moderate, high, very high |
 
-Every color is one of the panel's seven pure inks, so nothing is dithered.
+Every color is one of the panel's seven pure inks, so nothing is dithered. Colors look richer in bright, neutral light and at normal room temperature; this kind of panel loses saturation in the cold, roughly below 15°C / 60°F.
 
 The station makes one API call per update and stays well within OpenWeather's free tier, whichever screen you use.
 
@@ -163,7 +164,7 @@ pip install pillow requests
 python3 weather_station.py --demo --preview preview.png
 ```
 
-`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. Add `--screen inky_what` or `--screen inky_impression_5in7` to preview another screen. Preview colors approximate the real inks, which are softer on the panel.
+`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. Add `--screen inky_what` or `--screen inky_impression_5in7` to preview another screen. Impression previews use the ink colors Pimoroni measured on a real panel, so they look as muted as the screen will.
 
 Each screen is a profile in `displays/__init__.py` that names its size and layout:
 

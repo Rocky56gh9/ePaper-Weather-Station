@@ -207,8 +207,9 @@ class ImpressionTests(unittest.TestCase):
 
     def test_colors_carry_meaning(self):
         inks = self.render(SAMPLE)
-        self.assertIn(impression.BLUE, inks)        # rain bars
-        self.assertIn(impression.ORANGE, inks)      # sun icons and the warm Monday
+        self.assertIn(impression.BLUE, inks)        # rain bars and badge
+        self.assertIn(impression.YELLOW, inks)      # sun discs and mild temperatures
+        self.assertIn(impression.ORANGE, inks)      # sun rays and the warm Monday
         self.assertNotIn(impression.RED, inks)      # nothing hot, no alerts
         stormy = copy.deepcopy(SAMPLE)
         stormy["alerts"] = [{"event": "Flood Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
@@ -227,6 +228,39 @@ class ImpressionTests(unittest.TestCase):
         cells = impression.detail_cells(impression.Forecast(sparse, self.NOW, hours=24, days=7), "imperial", self.T, False)
         self.assertEqual([label for label, _ in cells], ["Rain today", "Wind · gusts 14", "UV index today", "Sunrise – sunset"])
 
+    def test_icons_are_filled(self):
+        # Sun discs fill yellow; rain and storm clouds, open at the bottom in the font, fill blue
+        for kind, fill in (("day_clear", impression.YELLOW), ("rain", impression.BLUE), ("storm", impression.BLUE),
+                           ("showers", impression.BLUE)):
+            layers, _ = impression.icon_layers(common.GLYPHS[kind], 60, impression.ICON_STYLES[kind])
+            fills = {}
+            for ink, mask in layers:
+                fills[ink] = fills.get(ink, 0) + mask.histogram()[255]
+            self.assertGreater(fills.get(fill, 0), 200, kind)
+        layers, _ = impression.icon_layers(common.GLYPHS["storm"], 60, impression.ICON_STYLES["storm"])
+        self.assertIn(impression.YELLOW, [ink for ink, _ in layers])  # the bolt
+
+    def test_long_summary_wraps_instead_of_trimming(self):
+        c = impression.ImpressionCanvas(600, 448)
+        text = "You can expect rain in the morning, with partly cloudy in the afternoon."
+        lines = impression.wrap(c, text, "regular", 14, [440, 584])
+        self.assertEqual(" ".join(lines), text)
+        self.assertEqual(len(lines), 2)
+        lines = impression.wrap(c, text * 3, "regular", 14, [440, 584])
+        self.assertTrue(lines[-1].endswith("…"))  # too long even for two lines
+
+    def test_alert_banner_keeps_the_full_name(self):
+        long_alert = copy.deepcopy(SAMPLE)
+        long_alert["alerts"] = [{"event": "Hurricane Force Wind Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400},
+                                {"event": "Coastal Flood Advisory", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
+        c = impression.ImpressionCanvas(600, 448)
+        fc = impression.Forecast(long_alert, self.NOW, hours=24, days=7)
+        drawn = []
+        with mock.patch.object(impression, "draw_banner", lambda c, title, detail, fill: drawn.append((title, detail))):
+            impression.draw_footer(c, fc, "imperial", self.T, False, self.NOW, None)
+        self.assertEqual(drawn, [("⚠ Hurricane Force Wind Warning", "Until Thu 7 AM · also Coastal Flood Advisory")])
+        self.assertIn(impression.RED, self.render(long_alert))
+
     def test_uses_the_wider_forecast(self):
         fc = common.Forecast(SAMPLE, self.NOW, hours=24, days=7)
         self.assertEqual(len(fc.hours), 24)
@@ -234,9 +268,11 @@ class ImpressionTests(unittest.TestCase):
                          ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"])
 
     def test_bands_and_words(self):
-        self.assertEqual([impression.temp_ink(t, "imperial") for t in (32, 40, 41, 79, 80, 90)],
-                         [impression.BLUE, impression.BLUE, impression.BLACK, impression.BLACK, impression.ORANGE, impression.RED])
-        self.assertEqual(impression.temp_ink(30, "metric"), impression.ORANGE)
+        I = impression
+        self.assertEqual([I.temp_ink(t, "imperial") for t in (32, 40, 41, 59, 60, 74, 75, 84, 85, 100)],
+                         [I.BLUE, I.BLUE, I.GREEN, I.GREEN, I.YELLOW, I.YELLOW, I.ORANGE, I.ORANGE, I.RED, I.RED])
+        self.assertEqual([I.temp_ink(t, "metric") for t in (0, 10, 20, 27, 31)], [I.BLUE, I.GREEN, I.YELLOW, I.ORANGE, I.RED])
+        self.assertEqual(I.band_edges("imperial"), [40.5, 59.5, 74.5, 84.5])
         self.assertEqual([impression.uv_style(u)[2] for u in (0, 3, 6, 8, 11)], ["Low", "Moderate", "High", "Very high", "Extreme"])
         self.assertEqual([common.compass(d) for d in (0, 90, 290, 350)], ["N", "E", "WNW", "N"])
         self.assertEqual([common.moon_name(p) for p in (0, 0.25, 0.4, 0.5, 0.75, 0.99)],
