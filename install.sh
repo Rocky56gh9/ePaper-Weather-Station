@@ -56,7 +56,8 @@ screen="${screen:-waveshare_3in52}"
 echo "Screen: $screen"
 
 echo "==> Installing system packages"
-packages=(python3-pil python3-requests python3-spidev)
+# cron runs the updates; it is usually preinstalled, but not on every image
+packages=(cron python3-pil python3-requests python3-spidev)
 if [[ "$screen" == inky_* ]]; then
     packages+=(python3-numpy)
     # A venv is only needed when inky isn't already installed for system Python (see below)
