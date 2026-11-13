@@ -1,4 +1,4 @@
-"""Draws the station's screen from a One Call API 3.0 response.
+"""The compact layout for small screens (Waveshare 3.52", Inky wHAT), from a One Call API 3.0 response.
 
 Positions are written for the original 360x240 design and scaled to the target screen's width;
 any extra height goes to the 12-hour chart. Screen regions (landscape):
@@ -18,139 +18,36 @@ any extra height goes to the 12-hour chart. Screen regions (landscape):
 Images use a three-entry palette (white, black, accent). On black-and-white screens the
 accent is drawn as black; on Inky red or yellow screens it marks alerts, rain, and big changes.
 """
-from datetime import datetime, timedelta, timezone
-from functools import lru_cache
-from pathlib import Path
-
-from PIL import Image, ImageDraw, ImageFont
+from .common import GLYPHS, WIND_UNITS, Forecast, clock, deg, weather_glyph
+from .common import Canvas as BaseCanvas
 
 DESIGN_WIDTH = 360
-FONT_DIR = Path(__file__).resolve().parent / "fonts"
-WIND_UNITS = {"imperial": "mph", "metric": "m/s"}
 
 # Palette indices; they match Pimoroni Inky's WHITE, BLACK, and RED/YELLOW
 WHITE, BLACK, ACCENT = 0, 1, 2
 ACCENT_RGB = {"red": (220, 0, 0), "yellow": (230, 190, 0)}
 
-# Weather Icons font codepoints (https://erikflowers.github.io/weather-icons/)
-GLYPHS = {
-    "day_clear": "", "night_clear": "",
-    "day_partly": "", "night_partly": "",
-    "cloudy": "", "showers": "", "rain": "",
-    "storm": "", "snow": "", "fog": "",
-    "raindrop": "", "wind": "", "sunrise": "",
-}
 
-
-@lru_cache(maxsize=None)
-def font(kind, size):
-    files = {"bold": "DejaVuSans-Bold.ttf", "regular": "DejaVuSans.ttf", "icons": "weathericons-regular.ttf"}
-    return ImageFont.truetype(str(FONT_DIR / files[kind]), size)
-
-
-def weather_glyph(condition_id, night=False):
-    """Map an OpenWeather condition code (https://openweathermap.org/weather-conditions) to an icon."""
-    if condition_id < 300:
-        return GLYPHS["storm"]
-    if condition_id < 400:
-        return GLYPHS["showers"]
-    if condition_id < 600:
-        return GLYPHS["rain"]
-    if condition_id < 700:
-        return GLYPHS["snow"]
-    if condition_id < 800:
-        return GLYPHS["fog"]
-    if condition_id == 800:
-        return GLYPHS["night_clear" if night else "day_clear"]
-    if condition_id <= 802:
-        return GLYPHS["night_partly" if night else "day_partly"]
-    return GLYPHS["cloudy"]
-
-
-def deg(value):
-    return f"{round(value)}°"
-
-
-def clock(dt):
-    return dt.strftime("%-I:%M %p")
-
-
-class Canvas:
-    """A palette image plus drawing helpers that take coordinates in 360-wide design units."""
+class Canvas(BaseCanvas):
+    """Three-ink canvas in 360-wide design units, with the compact layout's region edges."""
 
     def __init__(self, width, height, accent=None):
-        self.width, self.height = width, height
-        self.scale = width / DESIGN_WIDTH
+        palette = [(255, 255, 255), (0, 0, 0), ACCENT_RGB.get(accent, (0, 0, 0))]
+        super().__init__(width, height, palette, WHITE, DESIGN_WIDTH)
         self.accent = ACCENT if accent else BLACK
-        self.image = Image.new("P", (width, height), WHITE)
-        self.image.putpalette([255, 255, 255, 0, 0, 0, *ACCENT_RGB.get(accent, (0, 0, 0))] + [0, 0, 0] * 253)
-        self.draw = ImageDraw.Draw(self.image)
-
         self.left_panel_right = self.px(172)
         self.top_row_bottom = self.px(140)
         self.footer_top = height - self.px(24)
 
-    def px(self, value):
-        return round(value * self.scale)
-
-    def font(self, kind, size):
-        return font(kind, self.px(size))
-
-    def text_width(self, text, kind, size):
-        return self.draw.textlength(text, font=self.font(kind, size))
-
+    # Black is the usual ink here, so make it the default
     def text(self, xy, text, kind, size, fill=BLACK):
-        """Draw text at a position in design units."""
-        self.draw.text((self.px(xy[0]), self.px(xy[1])), text, font=self.font(kind, size), fill=fill)
+        super().text(xy, text, kind, size, fill)
 
     def text_at(self, xy, text, kind, size, fill=BLACK):
-        """Draw text at a position already in screen pixels."""
-        self.draw.text(xy, text, font=self.font(kind, size), fill=fill)
+        super().text_at(xy, text, kind, size, fill)
 
     def centered(self, text, center_x, y, kind, size, fill=BLACK):
-        """center_x in screen pixels, y in design units."""
-        self.text_at((center_x - self.text_width(text, kind, size) / 2, self.px(y)), text, kind, size, fill)
-
-    def fit(self, text, kind, size, max_width, force_ellipsis=False):
-        """Trim text with an ellipsis until it fits max_width screen pixels."""
-        if not force_ellipsis and self.text_width(text, kind, size) <= max_width:
-            return text
-        while text and self.text_width(text + "…", kind, size) > max_width:
-            text = text[:-1].rstrip()
-        return text + "…"
-
-
-class Forecast:
-    """The slices of a One Call response the screen needs, resolved against the current time.
-
-    Selecting by timestamp instead of list position keeps a cached (offline) forecast honest:
-    the hourly strip starts at the current hour and "Tomorrow" stays tomorrow.
-    """
-
-    def __init__(self, data, now):
-        self.tz = timezone(timedelta(seconds=data["timezone_offset"]))
-        self.now = now.astimezone(self.tz)
-        self.current = data["current"]
-        self.alerts = data.get("alerts", [])
-
-        today = self.now.date()
-        daily = data["daily"]
-        self.today = next((d for d in daily if self.local(d["dt"]).date() == today), daily[0])
-        self.next_days = [d for d in daily if self.local(d["dt"]).date() > today][:3]
-
-        hour_start = self.now.timestamp() - 3600
-        self.hours = [h for h in data["hourly"] if h["dt"] > hour_start][:12]
-
-    def local(self, ts):
-        return datetime.fromtimestamp(ts, self.tz)
-
-    @property
-    def is_night(self):
-        return not (self.today["sunrise"] <= self.now.timestamp() < self.today["sunset"])
-
-    def active_alerts(self):
-        ts = self.now.timestamp()
-        return [a for a in self.alerts if a.get("start", 0) <= ts < a.get("end", ts + 1)]
+        super().centered(text, center_x, y, kind, size, fill)
 
 
 def notable_conditions(fc, units, thresholds, evening):

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Show current conditions, the next 12 hours, and a 3-day forecast on an e-Paper display.
+"""Show current conditions, the hours ahead, and a multi-day forecast on an e-Paper display.
 
     python3 weather_station.py                          fetch weather and update the display
     python3 weather_station.py --deep-clean             cycle the panel black/white first (nightly)
     python3 weather_station.py --force                  update even during quiet hours
     python3 weather_station.py --preview out.png        render to a PNG instead of the display
     python3 weather_station.py --demo --preview out.png use bundled sample data; no API key or hardware
-    python3 weather_station.py --demo --screen inky_what --preview out.png   preview another screen
+    python3 weather_station.py --demo --screen inky_impression_5in7 --preview out.png   preview another screen
 """
 import argparse
 import configparser
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import requests
 
-import layout
+import layouts
 from displays import SCREENS, show
 
 ROOT = Path(__file__).resolve().parent
@@ -206,8 +206,7 @@ def run(args):
             # The sample is a fixed moment, so the demo renders identically every time
             now = datetime.fromtimestamp(data["current"]["dt"], timezone.utc)
             screen = args.screen or "waveshare_3in52"
-            width, height, accent = SCREENS[screen]
-            image = layout.render(data, "imperial", DEFAULT_THRESHOLDS["imperial"], now, size=(width, height), accent=accent)
+            image = layouts.render(screen, data, "imperial", DEFAULT_THRESHOLDS["imperial"], now)
             rotate = 0
         else:
             cfg = load_config(CONFIG_PATH)
@@ -218,9 +217,8 @@ def run(args):
                 return 0
             data, offline_since = get_forecast(cfg, now)
             screen = args.screen or cfg["screen"]
-            width, height, accent = SCREENS[screen]
-            image = layout.render(data, cfg["units"], cfg["thresholds"], now, size=(width, height), accent=accent,
-                                  evening_starts=cfg["evening_starts"], offline_since=offline_since)
+            image = layouts.render(screen, data, cfg["units"], cfg["thresholds"], now,
+                                   evening_starts=cfg["evening_starts"], offline_since=offline_since)
             rotate = cfg["rotate"]
     except StationError as e:
         log.error("%s", e)

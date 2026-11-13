@@ -24,9 +24,14 @@ else
         echo "Which display is attached?"
         echo "  1) Waveshare 3.52\" e-Paper HAT"
         echo "  2) Pimoroni Inky wHAT"
+        echo "  3) Pimoroni Inky Impression 5.7\" (7-color)"
         read -rp "Choice [1]: " choice
-        until [[ "${choice:-1}" =~ ^[12]$ ]]; do read -rp "1 or 2: " choice; done
-        [ "${choice:-1}" = 2 ] && screen=inky_what || screen=waveshare_3in52
+        until [[ "${choice:-1}" =~ ^[123]$ ]]; do read -rp "1, 2, or 3: " choice; done
+        case "${choice:-1}" in
+            2) screen=inky_what ;;
+            3) screen=inky_impression_5in7 ;;
+            *) screen=waveshare_3in52 ;;
+        esac
         read -rp "OpenWeather API key: " api_key
         until [[ "$api_key" =~ ^[A-Za-z0-9]+$ ]]; do read -rp "Letters and digits only. API key: " api_key; done
         read -rp "Latitude (e.g. 51.51): " lat
@@ -52,7 +57,7 @@ echo "Screen: $screen"
 
 echo "==> Installing system packages"
 packages=(python3-pil python3-requests python3-spidev)
-if [ "$screen" = inky_what ]; then
+if [[ "$screen" == inky_* ]]; then
     packages+=(python3-numpy)
     # A venv is only needed when inky isn't already installed for system Python (see below)
     python3 -c "import inky" 2>/dev/null || packages+=(python3-venv)
@@ -76,8 +81,8 @@ else
     sudo raspi-config nonint do_spi 0
     reboot_needed=true
 fi
-if [ "$screen" = inky_what ]; then
-    # Inky identifies itself over I2C, and drives SPI chip select itself, so the kernel must release it
+if [[ "$screen" == inky_* ]]; then
+    # Inky boards identify themselves over an I2C EEPROM
     if [ -e /dev/i2c-1 ]; then
         echo "I2C already enabled."
     else
