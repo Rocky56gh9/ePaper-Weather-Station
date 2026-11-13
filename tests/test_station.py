@@ -11,9 +11,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import layout  # noqa: E402
+import layouts  # noqa: E402
 import weather_station as ws  # noqa: E402
 from displays import SCREENS  # noqa: E402
+from layouts import common, impression  # noqa: E402
+from layouts import compact as layout  # noqa: E402
 
 SAMPLE = json.loads((ROOT / "sample_data.json").read_text())
 logging.disable(logging.CRITICAL)
@@ -121,12 +123,12 @@ class MainTests(unittest.TestCase):
         self.assertEqual(ws.main([]), 1)
         self.assertEqual(self.shown, [])
 
-    def test_inky_screen_renders_at_its_size(self):
-        write_config(self.config, screen="inky_what", rotate="180")
-        self.assertEqual(ws.main([]), 0)
-        screen, image = self.last
-        self.assertEqual(screen, "inky_what")
-        self.assertEqual(image.size, (400, 300))
+    def test_inky_screens_render_at_their_size(self):
+        for screen, size in (("inky_what", (400, 300)), ("inky_impression_5in7", (600, 448))):
+            write_config(self.config, screen=screen, rotate="180")
+            self.assertEqual(ws.main(["--force"]), 0)
+            self.assertEqual(self.last[0], screen)
+            self.assertEqual(self.last[1].size, size)
 
     def test_quiet_hours(self):
         hour = datetime.now().hour
@@ -138,16 +140,19 @@ class MainTests(unittest.TestCase):
 
 
 class LayoutTests(unittest.TestCase):
+    """The compact layout used by the Waveshare 3.52" and Inky wHAT."""
+
     def test_screen_sizes_and_accent(self):
         stormy = copy.deepcopy(SAMPLE)
         stormy["alerts"] = [{"event": "Flood Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
-        for screen, (width, height, accent) in SCREENS.items():
-            image = layout.render(stormy, "imperial", self.T, self.NOW, size=(width, height), accent=accent)
-            self.assertEqual(image.size, (width, height))
+        for screen, profile in SCREENS.items():
+            if profile.layout != "compact":
+                continue
+            image = layouts.render(screen, stormy, "imperial", self.T, self.NOW)
+            self.assertEqual(image.size, profile.size)
             used = {index for _, index in image.getcolors()}
             # Red screens use the accent ink for rain and alerts; black-and-white screens never do
-            self.assertEqual(layout.ACCENT in used, accent is not None, screen)
-
+            self.assertEqual(layout.ACCENT in used, profile.accent is not None, screen)
 
     T = ws.DEFAULT_THRESHOLDS["imperial"]
     NOW = datetime.fromtimestamp(SAMPLE["current"]["dt"], timezone.utc)
@@ -180,6 +185,65 @@ class LayoutTests(unittest.TestCase):
         fc = layout.Forecast(windy, self.NOW)
         notes = [text for _, text in layout.notable_conditions(fc, "imperial", self.T, evening=False)]
         self.assertIn("gusts 40", notes)
+
+
+class ImpressionTests(unittest.TestCase):
+    """The 7-color Inky Impression 5.7" layout."""
+
+    T = ws.DEFAULT_THRESHOLDS["imperial"]
+    NOW = datetime.fromtimestamp(SAMPLE["current"]["dt"], timezone.utc)
+
+    def render(self, data, hours=0, **kwargs):
+        image = layouts.render("inky_impression_5in7", data, "imperial", self.T, self.NOW + timedelta(hours=hours), **kwargs)
+        self.assertEqual(image.size, (600, 448))
+        return {index for _, index in image.getcolors()}
+
+    def test_states_render_with_only_panel_inks(self):
+        stormy = copy.deepcopy(SAMPLE)
+        stormy["alerts"] = [{"event": "Severe Thunderstorm Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
+        for inks in (self.render(SAMPLE), self.render(SAMPLE, hours=12), self.render(stormy),
+                     self.render(SAMPLE, hours=3, offline_since=self.NOW), self.render(SAMPLE, hours=72)):
+            self.assertLessEqual(inks, set(range(7)))  # pure inks only; nothing for the panel to dither
+
+    def test_colors_carry_meaning(self):
+        inks = self.render(SAMPLE)
+        self.assertIn(impression.BLUE, inks)        # rain bars
+        self.assertIn(impression.ORANGE, inks)      # sun icons and the warm Monday
+        self.assertNotIn(impression.RED, inks)      # nothing hot, no alerts
+        stormy = copy.deepcopy(SAMPLE)
+        stormy["alerts"] = [{"event": "Flood Warning", "start": 0, "end": SAMPLE["current"]["dt"] + 86400}]
+        self.assertIn(impression.RED, self.render(stormy))
+
+    def test_missing_optional_fields(self):
+        # Fields the compact layout never needed may be absent; the details grid just shows less
+        sparse = copy.deepcopy(SAMPLE)
+        for key in ("humidity", "pressure", "dew_point", "wind_deg"):
+            sparse["current"].pop(key)
+        for day in sparse["daily"]:
+            for key in ("moon_phase", "summary", "rain"):
+                day.pop(key, None)
+        self.render(sparse)
+        self.render(sparse, hours=12)
+        cells = impression.detail_cells(impression.Forecast(sparse, self.NOW, hours=24, days=7), "imperial", self.T, False)
+        self.assertEqual([label for label, _ in cells], ["Rain today", "Wind · gusts 14", "UV index today", "Sunrise – sunset"])
+
+    def test_uses_the_wider_forecast(self):
+        fc = common.Forecast(SAMPLE, self.NOW, hours=24, days=7)
+        self.assertEqual(len(fc.hours), 24)
+        self.assertEqual([fc.local(d["dt"]).strftime("%a") for d in fc.next_days],
+                         ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"])
+
+    def test_bands_and_words(self):
+        self.assertEqual([impression.temp_ink(t, "imperial") for t in (32, 40, 41, 79, 80, 90)],
+                         [impression.BLUE, impression.BLUE, impression.BLACK, impression.BLACK, impression.ORANGE, impression.RED])
+        self.assertEqual(impression.temp_ink(30, "metric"), impression.ORANGE)
+        self.assertEqual([impression.uv_style(u)[2] for u in (0, 3, 6, 8, 11)], ["Low", "Moderate", "High", "Very high", "Extreme"])
+        self.assertEqual([common.compass(d) for d in (0, 90, 290, 350)], ["N", "E", "WNW", "N"])
+        self.assertEqual([common.moon_name(p) for p in (0, 0.25, 0.4, 0.5, 0.75, 0.99)],
+                         ["New moon", "First quarter", "Waxing gibbous", "Full moon", "Last quarter", "New moon"])
+        self.assertEqual(impression.rain_amount(4.2, "imperial"), "0.17 in")
+        self.assertEqual(impression.pressure_text(1014, "imperial"), "29.94 in")
+        self.assertEqual(impression.pressure_trend(common.Forecast(SAMPLE, self.NOW, hours=24)), "falling")
 
 
 if __name__ == "__main__":
