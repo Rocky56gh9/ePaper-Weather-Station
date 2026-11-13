@@ -138,12 +138,17 @@ Edit `config.ini` with `nano config.ini`. Changes apply at the next update.
 
 ## Using it
 
+`install.sh` schedules the updates for you, so there's nothing to start by hand. Run these from the project folder (`cd ~/ePaper-Weather-Station`):
+
 | Task | Command |
 | --- | --- |
-| Update the display now, even in quiet hours | `python3 weather_station.py --force` |
-| Clear ghosting manually | `python3 weather_station.py --deep-clean` |
+| Update the display now, even in quiet hours | `.venv/bin/python weather_station.py --force` |
+| Clear ghosting manually | `.venv/bin/python weather_station.py --deep-clean` |
 | View logs | `journalctl -t epaper-weather` |
+| See the schedule | `crontab -l` (two lines ending in `# epaper-weather-station`) |
 | Get the latest version | `git pull` |
+
+**Which Python to use:** on an Inky display, the installer usually puts Pimoroni's `inky` library in a project virtual environment, `.venv`, and the commands above use its Python. If your project folder has no `.venv` (the Waveshare 3.52", or an Inky whose library was already installed system-wide), use `python3` instead. `crontab -l` shows which one the schedule uses.
 
 **When the network is down**, the station redraws its last good forecast under an **OFFLINE** banner that shows when that forecast was fetched. The hourly chart and day names stay correct as time passes, and it skips refreshes that wouldn't change anything.
 
@@ -183,6 +188,7 @@ python3 -m unittest discover tests
 | `No such file or directory: '/dev/spidev0.0'` | SPI is off. Run `sudo raspi-config nonint do_spi 0`, then reboot. |
 | Display never changes | Check `journalctl -t epaper-weather` for errors, and confirm you're outside your quiet hours. Then check that the HAT is fully seated on all 40 pins. |
 | `config.ini not found` | Run `./install.sh`, or `cp config.example.ini config.ini` and edit it. |
+| `No module named 'inky'` | You ran the station with the system `python3`, but `inky` is installed in the project's `.venv`. Use `.venv/bin/python weather_station.py` instead (see [Using it](#using-it)). |
 | Inky: `Chip Select: (line 8, GPIO8) currently claimed by spi0 CS0` | Add `dtoverlay=spi0-0cs` to `/boot/firmware/config.txt` (or `/boot/config.txt` on older systems) and reboot. `install.sh` does this for you. |
 | Inky: `No EEPROM detected!` | Check that I2C is on (`sudo raspi-config nonint do_i2c 0`) and the board is fully seated, then reboot. |
 | `Found a 800x480 Inky, but screen = inky_impression_5in7 draws 600x448` | The board is a different Inky Impression size than `screen` says. Only the 5.7" is supported so far. |
