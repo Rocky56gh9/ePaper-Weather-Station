@@ -36,21 +36,22 @@ The larger color screen has its own layout. It shows more of the forecast, and u
 | Area | Shows |
 | --- | --- |
 | **Top left** | Current conditions icon, temperature, feels-like, and description. Before evening: today's high and low. After 6pm: tonight's low. |
-| **Top right** | A details grid: rain chance and amount, wind direction and speed with gusts, UV index, humidity, pressure and its 3-hour trend, dew point with a comfort word, sunrise and sunset, and the moon phase. |
-| **Middle** | The next **24 hours**: a temperature line over rain-chance bars, with the day name marking midnight. |
-| **Lower** | The next **7 days**: icon, high, low, and rain chance when it's 10% or more. |
-| **Footer** | OpenWeather's one-line summary of the day ("Expect a day of partly cloudy with rain"), or "↓14° colder tomorrow" for a big swing. A red banner for active government weather alerts; a black one when offline. |
+| **Top right** | A details grid: rain chance (on a blue badge from 20%) and amount, wind direction and speed with gusts (on an orange badge above your `wind` or `gusts` setting), UV index, humidity, pressure and its 3-hour trend, dew point with a comfort word, sunrise and sunset, and the moon phase. |
+| **Middle** | The next **24 hours**: a temperature line, colored by temperature, over rain-chance bars, with the day name marking midnight. |
+| **Lower** | The next **7 days**: icon, rain chance when it's 10% or more, and a bar from the low to the high on a scale shared across the week, so warm and cold spells stand out. |
+| **Footer** | OpenWeather's summary of the day, over two lines if needed ("You can expect rain in the morning, with partly cloudy in the afternoon"), or "↓14° colder tomorrow" for a big swing. A red banner for active government weather alerts, with the alert's full name and when it ends; a black one when offline. |
 
-Each color has a fixed meaning:
+On this panel, blue and green print dark, close to black, while yellow, orange, and red read as clearly colored. So the layout puts color into solid shapes (badges, bars, filled icons) rather than colored text, and each color has a fixed meaning:
 
 | Color | Means |
 | --- | --- |
-| Blue | Rain and snow (chart bars, rain chances, wet-weather icons) and cold temperatures: 40°F / 4°C or below |
-| Orange | Sun icons, warm temperatures (80°F / 27°C and up), and wind above your `wind` or `gusts` setting |
-| Red | Hot temperatures (90°F / 32°C and up) and government weather alerts |
+| Blue, green, yellow, orange, red | Temperature, on a standard weather-map scale: 40°F and below, 41–59, 60–74, 75–84, 85 and up (metric: 4°C and below, 5–15, 16–23, 24–29, 30 and up). Used for the week's bars and the 24-hour line. |
+| Blue | Rain: chart bars, the rain badge, and filled rain clouds |
+| Yellow and orange | Sun: yellow discs with orange rays. A yellow bolt marks thunderstorms. |
+| Red | Government weather alerts |
 | Green, yellow, orange, red | The UV index badge: low, moderate, high, very high |
 
-Every color is one of the panel's seven pure inks, so nothing is dithered.
+Every color is one of the panel's seven pure inks, so nothing is dithered. Colors look richer in bright, neutral light and at normal room temperature; this kind of panel loses saturation in the cold, roughly below 15°C / 60°F.
 
 The station makes one API call per update and stays well within OpenWeather's free tier, whichever screen you use.
 
@@ -138,12 +139,17 @@ Edit `config.ini` with `nano config.ini`. Changes apply at the next update.
 
 ## Using it
 
+`install.sh` schedules the updates for you, so there's nothing to start by hand. Run these from the project folder (`cd ~/ePaper-Weather-Station`):
+
 | Task | Command |
 | --- | --- |
-| Update the display now, even in quiet hours | `python3 weather_station.py --force` |
-| Clear ghosting manually | `python3 weather_station.py --deep-clean` |
+| Update the display now, even in quiet hours | `.venv/bin/python weather_station.py --force` |
+| Clear ghosting manually | `.venv/bin/python weather_station.py --deep-clean` |
 | View logs | `journalctl -t epaper-weather` |
+| See the schedule | `crontab -l` (two lines ending in `# epaper-weather-station`) |
 | Get the latest version | `git pull` |
+
+**Which Python to use:** on an Inky display, the installer usually puts Pimoroni's `inky` library in a project virtual environment, `.venv`, and the commands above use its Python. If your project folder has no `.venv` (the Waveshare 3.52", or an Inky whose library was already installed system-wide), use `python3` instead. `crontab -l` shows which one the schedule uses.
 
 **When the network is down**, the station redraws its last good forecast under an **OFFLINE** banner that shows when that forecast was fetched. The hourly chart and day names stay correct as time passes, and it skips refreshes that wouldn't change anything.
 
@@ -158,7 +164,7 @@ pip install pillow requests
 python3 weather_station.py --demo --preview preview.png
 ```
 
-`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. Add `--screen inky_what` or `--screen inky_impression_5in7` to preview another screen. Preview colors approximate the real inks, which are softer on the panel.
+`--demo` renders a fixed moment from `sample_data.json`, and `--preview` saves the screen as a PNG. Add `--screen inky_what` or `--screen inky_impression_5in7` to preview another screen. Impression previews use the ink colors Pimoroni measured on a real panel, so they look as muted as the screen will.
 
 Each screen is a profile in `displays/__init__.py` that names its size and layout:
 
@@ -183,6 +189,7 @@ python3 -m unittest discover tests
 | `No such file or directory: '/dev/spidev0.0'` | SPI is off. Run `sudo raspi-config nonint do_spi 0`, then reboot. |
 | Display never changes | Check `journalctl -t epaper-weather` for errors, and confirm you're outside your quiet hours. Then check that the HAT is fully seated on all 40 pins. |
 | `config.ini not found` | Run `./install.sh`, or `cp config.example.ini config.ini` and edit it. |
+| `No module named 'inky'` | You ran the station with the system `python3`, but `inky` is installed in the project's `.venv`. Use `.venv/bin/python weather_station.py` instead (see [Using it](#using-it)). |
 | Inky: `Chip Select: (line 8, GPIO8) currently claimed by spi0 CS0` | Add `dtoverlay=spi0-0cs` to `/boot/firmware/config.txt` (or `/boot/config.txt` on older systems) and reboot. `install.sh` does this for you. |
 | Inky: `No EEPROM detected!` | Check that I2C is on (`sudo raspi-config nonint do_i2c 0`) and the board is fully seated, then reboot. |
 | `Found a 800x480 Inky, but screen = inky_impression_5in7 draws 600x448` | The board is a different Inky Impression size than `screen` says. Only the 5.7" is supported so far. |
